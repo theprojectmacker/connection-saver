@@ -232,6 +232,144 @@ app.delete('/api/devices/disconnect', async (req, res) => {
   }
 });
 
+// ============ CODE USAGE TRACKING ENDPOINTS ============
+
+// Track code usage (when someone pastes a code)
+app.post('/api/codes/:code/track-usage', async (req, res) => {
+  try {
+    const { code } = req.params;
+    const { userId, deviceId } = req.body;
+    const cleanCode = code.replace('-', '').toUpperCase();
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    // Find the pairing code
+    const { data: pairingCode, error: codeError } = await supabase
+      .from('pairing_codes')
+      .select('id, user_id')
+      .eq('code', cleanCode)
+      .single();
+
+    if (codeError || !pairingCode) {
+      return res.status(400).json({ error: 'Invalid code' });
+    }
+
+    // Record the usage
+    const { error: usageError } = await supabase
+      .from('code_usage')
+      .insert({
+        pairing_code_id: pairingCode.id,
+        user_id: userId,
+        device_id: deviceId || null,
+        code_owner_id: pairingCode.user_id,
+        timestamp: new Date().toISOString(),
+      });
+
+    if (usageError) throw usageError;
+    res.json({ message: 'Code usage tracked successfully' });
+  } catch (error) {
+    console.error('Error tracking code usage:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get code usage history (owner only)
+app.get('/api/codes/:code/usage-history', async (req, res) => {
+  try {
+    const { code } = req.params;
+    const { userId } = req.query;
+    const cleanCode = code.replace('-', '').toUpperCase();
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    // Find the pairing code and verify ownership
+    const { data: pairingCode, error: codeError } = await supabase
+      .from('pairing_codes')
+      .select('id, user_id')
+      .eq('code', cleanCode)
+      .single();
+
+    if (codeError || !pairingCode) {
+      return res.status(400).json({ error: 'Invalid code' });
+    }
+
+    if (pairingCode.user_id !== userId) {
+      return res.status(403).json({ error: 'Not authorized to view this code\'s usage' });
+    }
+
+    // Get usage history with user details
+    const { data: usage, error: usageError } = await supabase
+      .from('code_usage')
+      .select('id, user_id, device_id, timestamp, users:user_id(device_name, device_id)')
+      .eq('pairing_code_id', pairingCode.id)
+      .order('timestamp', { ascending: false });
+
+    if (usageError) throw usageError;
+
+    const usageHistory = usage.map(item => ({
+      id: item.id,
+      userId: item.user_id,
+      deviceId: item.device_id,
+      timestamp: item.timestamp,
+      deviceName: item.users?.device_name || 'Unknown Device',
+    }));
+
+    res.json({
+      code: cleanCode,
+      usageCount: usageHistory.length,
+      usage: usageHistory,
+    });
+  } catch (error) {
+    console.error('Error getting code usage history:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove user from code (owner only)
+app.delete('/api/codes/:code/usage/:usageId', async (req, res) => {
+  try {
+    const { code, usageId } = req.params;
+    const { userId } = req.body;
+    const cleanCode = code.replace('-', '').toUpperCase();
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    // Find the pairing code and verify ownership
+    const { data: pairingCode, error: codeError } = await supabase
+      .from('pairing_codes')
+      .select('id, user_id')
+      .eq('code', cleanCode)
+      .single();
+
+    if (codeError || !pairingCode) {
+      return res.status(400).json({ error: 'Invalid code' });
+    }
+
+    if (pairingCode.user_id !== userId) {
+      return res.status(403).json({ error: 'Not authorized to remove users from this code' });
+    }
+
+    // Delete the usage entry
+    const { error: deleteError } = await supabase
+      .from('code_usage')
+      .delete()
+      .eq('id', usageId)
+      .eq('pairing_code_id', pairingCode.id);
+
+    if (deleteError) throw deleteError;
+    res.json({ message: 'User removed successfully' });
+  } catch (error) {
+    console.error('Error removing user from code:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ PING ENDPOINTS ============
 
 // Send ping
