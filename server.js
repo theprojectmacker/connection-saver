@@ -275,6 +275,82 @@ app.post('/api/codes/:code/track-usage', async (req, res) => {
   }
 });
 
+// Get user's pasted codes history
+app.get('/api/users/:userId/pasted-codes', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    const { data: usage, error } = await supabase
+      .from('code_usage')
+      .select('id, pairing_code_id, timestamp, pairing_codes:pairing_code_id(code, users:user_id(device_name))')
+      .eq('user_id', userId)
+      .order('timestamp', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+
+    const pastedCodes = usage.map(item => ({
+      id: item.id,
+      code: item.pairing_codes?.code || 'Unknown',
+      usedAt: item.timestamp,
+      ownerDevice: item.pairing_codes?.users?.device_name || 'Unknown Device',
+    }));
+
+    res.json({
+      count: pastedCodes.length,
+      codes: pastedCodes,
+    });
+  } catch (error) {
+    console.error('Error getting pasted codes:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get code usage list for generated code (owner only)
+app.get('/api/codes/:code/who-used', async (req, res) => {
+  try {
+    const { code } = req.params;
+    const cleanCode = code.replace('-', '').toUpperCase();
+
+    const { data: pairingCode, error: codeError } = await supabase
+      .from('pairing_codes')
+      .select('id')
+      .eq('code', cleanCode)
+      .single();
+
+    if (codeError || !pairingCode) {
+      return res.status(400).json({ error: 'Invalid code' });
+    }
+
+    const { data: usage, error: usageError } = await supabase
+      .from('code_usage')
+      .select('id, timestamp, users:user_id(device_name, device_id)')
+      .eq('pairing_code_id', pairingCode.id)
+      .order('timestamp', { ascending: false });
+
+    if (usageError) throw usageError;
+
+    const usageList = usage.map(item => ({
+      id: item.id,
+      device: item.users?.device_name || 'Unknown Device',
+      usedAt: item.timestamp,
+    }));
+
+    res.json({
+      code: cleanCode,
+      count: usageList.length,
+      users: usageList,
+    });
+  } catch (error) {
+    console.error('Error getting code usage:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get code usage history (owner only)
 app.get('/api/codes/:code/usage-history', async (req, res) => {
   try {

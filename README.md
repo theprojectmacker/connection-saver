@@ -153,16 +153,9 @@ CREATE POLICY "Allow all operations on code_usage" ON code_usage FOR ALL USING (
 3. Click "Run" and let it complete
 4. Done! All tables are ready for the backend
 
-## Code Management Interface
+## Code Usage Tracking
 
-A web interface for code owners to manage who has used their codes is available at `code-management.html`.
-
-Features:
-- View all users who have used a specific code
-- Remove users from a code
-- Track usage history with timestamps
-
-To use:
-1. Open `code-management.html` in a browser
-2. Enter your user ID and the code you want to manage
-3. View and manage users who have used your code
+The backend tracks code usage when someone pastes a code:
+- When a user pastes a code, it's recorded in the `code_usage` table
+- Both the code owner and the person who pasted can see this in the mobile app
+- The mobile app displays who used their codes and what codes they've pasted
