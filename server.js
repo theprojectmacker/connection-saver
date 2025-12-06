@@ -27,7 +27,7 @@ app.get('/api/health', (req, res) => {
 // Get or create user
 app.post('/api/users/get-or-create', async (req, res) => {
   try {
-    const { deviceId, deviceName, expoPushToken } = req.body;
+    const { deviceId, deviceName, expoPushToken, fullName, emergencyContact1Name, emergencyContact1Phone, emergencyContact2Name, emergencyContact2Phone, birthday, address } = req.body;
 
     if (!deviceId || !deviceName) {
       return res.status(400).json({ error: 'Missing required fields: deviceId, deviceName' });
@@ -45,11 +45,24 @@ app.post('/api/users/get-or-create', async (req, res) => {
     }
 
     if (existingUser) {
-      // Update push token if provided
+      // Update user info if provided
+      const updateData = {};
       if (expoPushToken && expoPushToken !== existingUser.expo_push_token) {
+        updateData.expo_push_token = expoPushToken;
+      }
+      if (deviceName) updateData.device_name = deviceName;
+      if (fullName) updateData.full_name = fullName;
+      if (emergencyContact1Name) updateData.emergency_contact1_name = emergencyContact1Name;
+      if (emergencyContact1Phone) updateData.emergency_contact1_phone = emergencyContact1Phone;
+      if (emergencyContact2Name) updateData.emergency_contact2_name = emergencyContact2Name;
+      if (emergencyContact2Phone) updateData.emergency_contact2_phone = emergencyContact2Phone;
+      if (birthday) updateData.birthday = birthday;
+      if (address) updateData.address = address;
+
+      if (Object.keys(updateData).length > 0) {
         await supabase
           .from('users')
-          .update({ expo_push_token: expoPushToken })
+          .update(updateData)
           .eq('id', existingUser.id);
       }
       return res.json(existingUser);
@@ -61,6 +74,13 @@ app.post('/api/users/get-or-create', async (req, res) => {
       .insert({
         device_id: deviceId,
         device_name: deviceName,
+        full_name: fullName || null,
+        emergency_contact1_name: emergencyContact1Name || null,
+        emergency_contact1_phone: emergencyContact1Phone || null,
+        emergency_contact2_name: emergencyContact2Name || null,
+        emergency_contact2_phone: emergencyContact2Phone || null,
+        birthday: birthday || null,
+        address: address || null,
         expo_push_token: expoPushToken,
       })
       .select()
@@ -79,7 +99,7 @@ app.post('/api/users/get-or-create', async (req, res) => {
 // Generate pairing code with location
 app.post('/api/pairing/generate', async (req, res) => {
   try {
-    const { userId, latitude, longitude, accuracy } = req.body;
+    const { userId, latitude, longitude, accuracy, deviceName } = req.body;
 
     if (!userId) {
       return res.status(400).json({ error: 'Missing required field: userId' });
@@ -87,6 +107,14 @@ app.post('/api/pairing/generate', async (req, res) => {
 
     // Generate random 6-character code
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    // Update user with custom device name if provided
+    if (deviceName) {
+      await supabase
+        .from('users')
+        .update({ device_name: deviceName })
+        .eq('id', userId);
+    }
 
     const { error } = await supabase.from('pairing_codes').insert({
       user_id: userId,
@@ -256,19 +284,41 @@ app.post('/api/codes/:code/track-usage', async (req, res) => {
       return res.status(400).json({ error: 'Invalid code' });
     }
 
-    // Record the usage
-    const { error: usageError } = await supabase
+    // Check if this user already has a usage entry for this code
+    const { data: existingUsage, error: checkError } = await supabase
       .from('code_usage')
-      .insert({
-        pairing_code_id: pairingCode.id,
-        user_id: userId,
-        device_id: deviceId || null,
-        code_owner_id: pairingCode.user_id,
-        timestamp: new Date().toISOString(),
-      });
+      .select('id')
+      .eq('pairing_code_id', pairingCode.id)
+      .eq('user_id', userId)
+      .single();
 
-    if (usageError) throw usageError;
-    res.json({ message: 'Code usage tracked successfully' });
+    if (existingUsage && !checkError) {
+      // Update existing entry with new timestamp
+      const { error: updateError } = await supabase
+        .from('code_usage')
+        .update({
+          timestamp: new Date().toISOString(),
+          device_id: deviceId || null,
+        })
+        .eq('id', existingUsage.id);
+
+      if (updateError) throw updateError;
+      res.json({ message: 'Code usage updated successfully' });
+    } else {
+      // Create new usage entry
+      const { error: usageError } = await supabase
+        .from('code_usage')
+        .insert({
+          pairing_code_id: pairingCode.id,
+          user_id: userId,
+          device_id: deviceId || null,
+          code_owner_id: pairingCode.user_id,
+          timestamp: new Date().toISOString(),
+        });
+
+      if (usageError) throw usageError;
+      res.json({ message: 'Code usage tracked successfully' });
+    }
   } catch (error) {
     console.error('Error tracking code usage:', error);
     res.status(500).json({ error: error.message });
