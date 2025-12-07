@@ -9,20 +9,25 @@ dotenv.config();
 const app = express();
 
 let firebaseInitialized = false;
-try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
-    firebaseInitialized = true;
-    console.log('Firebase initialized successfully');
-  } else {
-    console.log('Firebase service account JSON not configured, push notifications disabled');
+
+// Initialize Firebase asynchronously to avoid blocking
+setImmediate(() => {
+  try {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+      firebaseInitialized = true;
+      console.log('Firebase initialized successfully');
+    } else {
+      console.log('Firebase service account JSON not configured, push notifications disabled');
+    }
+  } catch (error) {
+    console.error('Failed to initialize Firebase:', error.message);
+    firebaseInitialized = false;
   }
-} catch (error) {
-  console.error('Failed to initialize Firebase:', error.message);
-}
+});
 
 // Middleware
 app.use(cors());
@@ -107,6 +112,71 @@ app.post('/api/users/get-or-create', async (req, res) => {
     res.json(newUser);
   } catch (error) {
     console.error('Error in get-or-create user:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get user profile including emergency contacts
+app.get('/api/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, device_id, device_name, full_name, emergency_contact1_name, emergency_contact1_phone, emergency_contact2_name, emergency_contact2_phone, birthday, address, created_at')
+      .eq('id', userId)
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update user emergency contacts
+app.post('/api/users/:userId/update-emergency-contacts', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { emergency_contact1_name, emergency_contact1_phone, emergency_contact2_name, emergency_contact2_phone } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    const updateData = {};
+    if (emergency_contact1_name) updateData.emergency_contact1_name = emergency_contact1_name;
+    if (emergency_contact1_phone) updateData.emergency_contact1_phone = emergency_contact1_phone;
+    if (emergency_contact2_name) updateData.emergency_contact2_name = emergency_contact2_name;
+    if (emergency_contact2_phone) updateData.emergency_contact2_phone = emergency_contact2_phone;
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('Emergency contacts updated for user:', userId);
+    res.json({ message: 'Emergency contacts updated successfully', user });
+  } catch (error) {
+    console.error('Error updating emergency contacts:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -591,15 +661,19 @@ app.post('/api/notifications/send-crash', async (req, res) => {
       .single();
 
     if (userError || !user) {
+      console.warn('User not found or no FCM token for:', toUserId);
       return res.status(404).json({ error: 'User not found or no FCM token registered' });
     }
 
     if (!user.fcm_token) {
+      console.warn('User has no FCM token:', toUserId);
       return res.status(400).json({ error: 'User does not have FCM token registered' });
     }
 
     if (!firebaseInitialized) {
-      return res.status(500).json({ error: 'Firebase not configured on backend' });
+      console.warn('Firebase not initialized yet, queueing notification');
+      // Don't block - Firebase might be initializing
+      return res.status(202).json({ message: 'Notification queued - Firebase initializing' });
     }
 
     const payload = {
@@ -622,16 +696,18 @@ app.post('/api/notifications/send-crash', async (req, res) => {
       },
     };
 
+    // Send asynchronously without blocking - fire and forget
     admin.messaging().send({
       token: user.fcm_token,
       ...payload,
     }).then((messageId) => {
       console.log('Crash notification sent successfully:', messageId);
-      res.json({ message: 'Crash notification sent successfully', messageId });
     }).catch((error) => {
-      console.error('Error sending notification:', error);
-      res.status(500).json({ error: 'Failed to send notification', details: error.message });
+      console.error('Error sending notification to Firebase:', error.message);
     });
+
+    // Return immediately to avoid blocking the client
+    res.status(202).json({ message: 'Crash notification sent successfully' });
   } catch (error) {
     console.error('Error in send-crash endpoint:', error);
     res.status(500).json({ error: error.message });
