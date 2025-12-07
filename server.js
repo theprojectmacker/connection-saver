@@ -2,10 +2,27 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
+const admin = require('firebase-admin');
 
 dotenv.config();
 
 const app = express();
+
+let firebaseInitialized = false;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    firebaseInitialized = true;
+    console.log('Firebase initialized successfully');
+  } else {
+    console.log('Firebase service account JSON not configured, push notifications disabled');
+  }
+} catch (error) {
+  console.error('Failed to initialize Firebase:', error.message);
+}
 
 // Middleware
 app.use(cors());
@@ -516,6 +533,164 @@ app.post('/api/pings/send', async (req, res) => {
     res.json({ message: 'Ping sent successfully' });
   } catch (error) {
     console.error('Error sending ping:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ NOTIFICATION ENDPOINTS ============
+
+// Update FCM token
+app.post('/api/users/update-fcm-token', async (req, res) => {
+  try {
+    const { deviceId, fcmToken } = req.body;
+
+    if (!deviceId || !fcmToken) {
+      return res.status(400).json({ error: 'Missing required fields: deviceId, fcmToken' });
+    }
+
+    const { data: user, error: getUserError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('device_id', deviceId)
+      .single();
+
+    if (getUserError && getUserError.code !== 'PGRST116') {
+      throw getUserError;
+    }
+
+    if (user) {
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ fcm_token: fcmToken })
+        .eq('id', user.id);
+
+      if (updateError) throw updateError;
+      res.json({ message: 'FCM token updated successfully' });
+    } else {
+      res.status(404).json({ error: 'User not found' });
+    }
+  } catch (error) {
+    console.error('Error updating FCM token:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send crash notification to user
+app.post('/api/notifications/send-crash', async (req, res) => {
+  try {
+    const { toUserId, deviceName, message } = req.body;
+
+    if (!toUserId || !deviceName) {
+      return res.status(400).json({ error: 'Missing required fields: toUserId, deviceName' });
+    }
+
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('fcm_token')
+      .eq('id', toUserId)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found or no FCM token registered' });
+    }
+
+    if (!user.fcm_token) {
+      return res.status(400).json({ error: 'User does not have FCM token registered' });
+    }
+
+    if (!firebaseInitialized) {
+      return res.status(500).json({ error: 'Firebase not configured on backend' });
+    }
+
+    const payload = {
+      notification: {
+        title: 'CRASH DETECTED!',
+        body: `Crash detected on ${deviceName}. ${message || 'Contact emergency services immediately!'}`,
+      },
+      data: {
+        type: 'crash',
+        device_name: deviceName,
+        timestamp: new Date().toISOString(),
+      },
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'crash_detection_channel',
+          eventTimestamp: new Date().getTime().toString(),
+        },
+      },
+    };
+
+    admin.messaging().send({
+      token: user.fcm_token,
+      ...payload,
+    }).then((messageId) => {
+      console.log('Crash notification sent successfully:', messageId);
+      res.json({ message: 'Crash notification sent successfully', messageId });
+    }).catch((error) => {
+      console.error('Error sending notification:', error);
+      res.status(500).json({ error: 'Failed to send notification', details: error.message });
+    });
+  } catch (error) {
+    console.error('Error in send-crash endpoint:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send general notification to user
+app.post('/api/notifications/send', async (req, res) => {
+  try {
+    const { toUserId, title, body } = req.body;
+
+    if (!toUserId || !title || !body) {
+      return res.status(400).json({ error: 'Missing required fields: toUserId, title, body' });
+    }
+
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('fcm_token')
+      .eq('id', toUserId)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.fcm_token) {
+      return res.status(400).json({ error: 'User does not have FCM token registered' });
+    }
+
+    if (!firebaseInitialized) {
+      return res.status(500).json({ error: 'Firebase not configured on backend' });
+    }
+
+    const payload = {
+      notification: {
+        title: title,
+        body: body,
+      },
+      data: {
+        type: 'general',
+        timestamp: new Date().toISOString(),
+      },
+      android: {
+        priority: 'high',
+      },
+    };
+
+    admin.messaging().send({
+      token: user.fcm_token,
+      ...payload,
+    }).then((messageId) => {
+      console.log('Notification sent successfully:', messageId);
+      res.json({ message: 'Notification sent successfully', messageId });
+    }).catch((error) => {
+      console.error('Error sending notification:', error);
+      res.status(500).json({ error: 'Failed to send notification', details: error.message });
+    });
+  } catch (error) {
+    console.error('Error in send notification endpoint:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -75,6 +75,13 @@ CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   device_id TEXT UNIQUE NOT NULL,
   device_name TEXT NOT NULL,
+  full_name TEXT,
+  emergency_contact1_name TEXT,
+  emergency_contact1_phone TEXT,
+  emergency_contact2_name TEXT,
+  emergency_contact2_phone TEXT,
+  birthday TEXT,
+  address TEXT,
   expo_push_token TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
