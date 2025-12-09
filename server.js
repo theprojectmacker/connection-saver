@@ -14,17 +14,37 @@ let firebaseInitialized = false;
 setImmediate(() => {
   try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+      // Fix real newlines that break JSON parsing
+      // Remove actual newlines/line breaks but preserve the JSON structure
+      serviceAccountJson = serviceAccountJson
+        .replace(/[\r\n]+/g, '')  // Remove all actual newlines
+        .trim();
+
+      console.log('Firebase JSON length:', serviceAccountJson.length);
+      const serviceAccount = JSON.parse(serviceAccountJson);
+
+      // Validate the key structure
+      if (!serviceAccount.private_key) {
+        throw new Error('Missing private_key in service account JSON');
+      }
+
+      console.log('Firebase service account loaded - validating...');
+      console.log('Type:', serviceAccount.type);
+      console.log('Project ID:', serviceAccount.project_id);
+
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
       });
       firebaseInitialized = true;
-      console.log('Firebase initialized successfully');
+      console.log('✅ Firebase initialized successfully!');
     } else {
-      console.log('Firebase service account JSON not configured, push notifications disabled');
+      console.log('⚠️  Firebase service account JSON not configured, push notifications disabled');
     }
   } catch (error) {
-    console.error('Failed to initialize Firebase:', error.message);
+    console.error('❌ Failed to initialize Firebase:', error.message);
+    console.error('Stack:', error.stack);
     firebaseInitialized = false;
   }
 });
