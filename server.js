@@ -201,6 +201,33 @@ app.post('/api/users/:userId/update-emergency-contacts', async (req, res) => {
   }
 });
 
+// Delete user profile
+app.delete('/api/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    const { error: deleteError } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', userId);
+
+    if (deleteError) {
+      console.error('Error deleting user:', deleteError);
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('User profile deleted:', userId);
+    res.json({ message: 'User profile deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user profile:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ PAIRING CODE ENDPOINTS ============
 
 // Generate pairing code with location
@@ -829,6 +856,46 @@ app.get('/api/pairing/location/:code', async (req, res) => {
     });
   } catch (error) {
     console.error('Error getting location by code:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update location for pairing code (periodic updates)
+app.post('/api/pairing/update-location/:code', async (req, res) => {
+  try {
+    const { code } = req.params;
+    const { latitude, longitude, accuracy } = req.body;
+    const cleanCode = code.replace('-', '').toUpperCase();
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({ error: 'Missing required fields: latitude, longitude' });
+    }
+
+    const { data: pairingCode, error: codeError } = await supabase
+      .from('pairing_codes')
+      .select('id')
+      .eq('code', cleanCode)
+      .single();
+
+    if (codeError || !pairingCode) {
+      return res.status(400).json({ error: 'Invalid pairing code' });
+    }
+
+    const { error: updateError } = await supabase
+      .from('pairing_codes')
+      .update({
+        latitude: latitude,
+        longitude: longitude,
+        accuracy: accuracy || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', pairingCode.id);
+
+    if (updateError) throw updateError;
+
+    res.json({ message: 'Location updated successfully', code: cleanCode });
+  } catch (error) {
+    console.error('Error updating location:', error);
     res.status(500).json({ error: error.message });
   }
 });
