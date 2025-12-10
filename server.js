@@ -201,6 +201,49 @@ app.post('/api/users/:userId/update-emergency-contacts', async (req, res) => {
   }
 });
 
+// Update complete user profile
+app.patch('/api/users/:userId/update-profile', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { full_name, birthday, address, emergency_contact1_name, emergency_contact1_phone, emergency_contact2_name, emergency_contact2_phone, device_name } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing required field: userId' });
+    }
+
+    const updateData = {};
+    if (full_name) updateData.full_name = full_name;
+    if (birthday) updateData.birthday = birthday;
+    if (address) updateData.address = address;
+    if (device_name) updateData.device_name = device_name;
+    if (emergency_contact1_name) updateData.emergency_contact1_name = emergency_contact1_name;
+    if (emergency_contact1_phone) updateData.emergency_contact1_phone = emergency_contact1_phone;
+    if (emergency_contact2_name) updateData.emergency_contact2_name = emergency_contact2_name;
+    if (emergency_contact2_phone) updateData.emergency_contact2_phone = emergency_contact2_phone;
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('User profile updated for user:', userId);
+    res.json({ message: 'Profile updated successfully', user });
+  } catch (error) {
+    console.error('Error updating user profile:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Delete user profile
 app.delete('/api/users/:userId', async (req, res) => {
   try {
